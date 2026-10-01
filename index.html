@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#14283A">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="三地天氣">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>三地時間・天氣</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#e9eef0;--panel:#f6f9fa;--ink:#14283a;--mute:#5d7283;--line:#c5d2d8;--rain:#2457d6;--dry:#b9c7ce;--sun:#d98a1f}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1c27;--panel:#162634;--ink:#e6eef3;--mute:#8fa4b3;--line:#27404f;--rain:#6b97ff;--dry:#34505f;--sun:#f0b04a}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:"Noto Sans TC",system-ui,sans-serif;line-height:1.5;padding:calc(24px + env(safe-area-inset-top,0px)) 16px calc(48px + env(safe-area-inset-bottom,0px))}
+main{max-width:980px;margin:0 auto}
+h1{font-size:1.1rem;font-weight:500;margin:0 0 4px;color:var(--mute)}
+#brief{font-size:1.35rem;font-weight:700;line-height:1.45;margin:0 0 20px;max-width:34em}
+.bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:20px;font-size:.9rem;color:var(--mute)}
+button{font:inherit;background:var(--ink);color:var(--bg);border:0;border-radius:6px;padding:6px 12px;cursor:pointer}
+button:focus-visible{outline:3px solid var(--rain);outline-offset:2px}
+.city{display:grid;grid-template-columns:230px 1fr;gap:20px;background:var(--panel);border-top:3px solid var(--ink);padding:18px 20px;margin-bottom:14px}
+.time{font-size:2.6rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.name{font-size:1.05rem;font-weight:700;margin-top:10px}
+.sub{color:var(--mute);font-size:.85rem}
+.now{display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
+.temp{font-size:1.9rem;font-weight:500}
+.rainmsg{font-weight:700;margin:6px 0 12px}
+.rainmsg.wet{color:var(--rain)}
+.strip{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;align-items:end;height:64px}
+.strip i{display:block;background:var(--dry);min-height:3px;border-radius:2px 2px 0 0}
+.strip i.r{background:var(--rain)}
+.lab{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;font-size:.68rem;color:var(--mute);margin-top:4px}
+.lab span{overflow:visible;white-space:nowrap}
+.err{color:#b3261e}
+@media (max-width:700px){.city{grid-template-columns:1fr;gap:12px}.time{font-size:2.2rem}}
+@media (prefers-reduced-motion:no-preference){.strip i{transition:height .4s}}
+</style>
+</head>
+<body>
+<main>
+<h1 id="today"></h1>
+<p id="brief">載入天氣中…</p>
+<div class="bar">
+  <span id="upd">尚未更新</span>
+  <button id="refresh">立即更新</button>
+  <button id="notif">開啟降雨通知</button>
+</div>
+<div id="cities"></div>
+</main>
+<script>
+const CITIES=[
+ {id:'zb',name:'竹北',place:'聯詠科技',lat:24.8338,lon:121.0120,tz:'Asia/Taipei'},
+ {id:'tk',name:'東京金町',place:'東京理科大學',lat:35.7662,lon:139.8604,tz:'Asia/Tokyo'},
+ {id:'mb',name:'墨爾本',place:'墨爾本大學',lat:-37.7963,lon:144.9614,tz:'Australia/Melbourne'}
+];
+const WX={0:'晴',1:'大致晴朗',2:'多雲時晴',3:'陰',45:'霧',48:'霧凇',51:'毛毛雨',53:'毛毛雨',55:'毛毛雨',56:'凍毛毛雨',57:'凍毛毛雨',61:'小雨',63:'中雨',65:'大雨',66:'凍雨',67:'凍雨',71:'小雪',73:'中雪',75:'大雪',77:'雪粒',80:'陣雨',81:'陣雨',82:'強陣雨',85:'陣雪',86:'陣雪',95:'雷雨',96:'雷雨夾冰雹',99:'雷雨夾冰雹'};
+const $=s=>document.querySelector(s);
+const data={};
+
+// ---------- 時鐘 ----------
+function parts(tz,d){
+  const f=new Intl.DateTimeFormat('en-US',{timeZone:tz,hourCycle:'h23',year:'numeric',month:'numeric',day:'numeric',hour:'numeric',minute:'numeric',second:'numeric'});
+  return Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));
+}
+function offsetMin(tz){
+  const d=new Date(Math.floor(Date.now()/1000)*1000),p=parts(tz,d);
+  return Math.round((Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute,p.second)-d.getTime())/60000);
+}
+function tick(){
+  const now=new Date(),base=offsetMin('Asia/Taipei');
+  $('#today').textContent=new Intl.DateTimeFormat('zh-TW',{timeZone:'Asia/Taipei',dateStyle:'full'}).format(now);
+  CITIES.forEach(c=>{
+    $('#t-'+c.id).textContent=new Intl.DateTimeFormat('zh-TW',{timeZone:c.tz,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(now);
+    $('#d-'+c.id).textContent=new Intl.DateTimeFormat('zh-TW',{timeZone:c.tz,month:'numeric',day:'numeric',weekday:'short'}).format(now);
+    const diff=(offsetMin(c.tz)-base)/60;
+    $('#o-'+c.id).textContent=diff===0?'台灣時間':`${diff>0?'比台灣快':'比台灣慢'} ${Math.abs(diff)} 小時`;
+  });
+}
+
+// ---------- 天氣 ----------
+async function load(c){
+  const u=`https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lon}&current=temperature_2m,apparent_temperature,weather_code&hourly=precipitation_probability,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=3`;
+  const r=await fetch(u);if(!r.ok)throw new Error(r.status);return r.json();
+}
+function analyse(d){
+  const nowH=d.current.time.slice(0,13);
+  let i=d.hourly.time.findIndex(t=>t.slice(0,13)>=nowH);if(i<0)i=0;
+  const wet=k=>d.hourly.precipitation[k]>=0.2||d.hourly.precipitation_probability[k]>=60;
+  const hrs=[];
+  for(let k=i;k<Math.min(i+24,d.hourly.time.length);k++)
+    hrs.push({t:d.hourly.time[k].slice(11,16),p:d.hourly.precipitation_probability[k]||0,r:wet(k)});
+  const s=hrs.findIndex(h=>h.r);
+  let msg,wetNow=hrs[0].r;
+  if(wetNow){const e=hrs.findIndex(h=>!h.r);msg=e<0?'目前有雨，未來 24 小時預計持續':`目前有雨，預計 ${hrs[e].t} 前後轉停`;}
+  else msg=s<0?'未來 24 小時無明顯降雨':`預計 ${hrs[s].t} 開始下雨（降雨機率 ${hrs[s].p}%）`;
+  return{hrs,msg,wetNow,start:s<0||wetNow?null:hrs[s].t,soon:!wetNow&&s>=0&&s<=2};
+}
+function draw(c){
+  const d=data[c.id],a=d.a,w=d.raw;
+  $('#w-'+c.id).innerHTML=`<div class="now"><span class="temp">${Math.round(w.current.temperature_2m)}°C</span><span>${WX[w.current.weather_code]||'—'}</span><span class="sub">體感 ${Math.round(w.current.apparent_temperature)}°　今日 ${Math.round(w.daily.temperature_2m_min[0])}–${Math.round(w.daily.temperature_2m_max[0])}°　降雨機率 ${w.daily.precipitation_probability_max[0]}%</span></div>
+  <div class="rainmsg ${a.start||a.wetNow?'wet':''}">${a.msg}</div>
+  <div class="strip" role="img" aria-label="未來 24 小時降雨機率">${a.hrs.map(h=>`<i class="${h.r?'r':''}" style="height:${Math.max(5,h.p)}%" title="${h.t}　${h.p}%"></i>`).join('')}</div>
+  <div class="lab">${a.hrs.map((h,k)=>`<span>${k%4===0?h.t.slice(0,2)+'時':''}</span>`).join('')}</div>`;
+}
+function brief(){
+  const h=+parts('Asia/Taipei',new Date()).hour;
+  const hi=h<12?'早安。':h<18?'午安。':'晚安。';
+  const bits=CITIES.filter(c=>data[c.id]).map(c=>{
+    const w=data[c.id].raw,a=data[c.id].a;
+    return `${c.name} ${WX[w.current.weather_code]||''} ${Math.round(w.current.temperature_2m)}°C，${a.msg}`;
+  });
+  $('#brief').textContent=bits.length?hi+bits.join('；')+'。':'暫時無法取得天氣資料。';
+}
+function notify(c,a){
+  if(!a.soon||!('Notification' in window)||Notification.permission!=='granted')return;
+  const key=c.id+':'+new Date().toDateString()+a.start;
+  try{if(localStorage.getItem('n:'+key))return;localStorage.setItem('n:'+key,1)}catch(e){}
+  new Notification(`${c.name}（${c.place}）快下雨了`,{body:a.msg});
+}
+async function refreshAll(){
+  await Promise.all(CITIES.map(async c=>{
+    try{
+      const raw=await load(c);data[c.id]={raw,a:analyse(raw)};
+      draw(c);notify(c,data[c.id].a);
+    }catch(e){
+      $('#w-'+c.id).innerHTML=`<div class="err">天氣資料更新失敗，請確認網路連線後按「立即更新」。</div>`;
+    }
+  }));
+  brief();
+  $('#upd').textContent='上次更新 '+new Intl.DateTimeFormat('zh-TW',{timeZone:'Asia/Taipei',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())+'（台灣時間），每小時自動更新';
+}
+function scheduleHourly(){
+  const n=new Date(),ms=(60-n.getMinutes())*60000-n.getSeconds()*1000+15000;
+  setTimeout(()=>{refreshAll();scheduleHourly();
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});},ms);
+}
+
+// ---------- 啟動 ----------
+$('#refresh').onclick=refreshAll;
+$('#notif').onclick=async()=>{
+  if(!('Notification' in window)){alert('此瀏覽器不支援通知');return;}
+  const p=await Notification.requestPermission();
+  $('#notif').textContent=p==='granted'?'降雨通知已開啟':'通知未開啟';
+};
+if('Notification' in window&&Notification.permission==='granted')$('#notif').textContent='降雨通知已開啟';
+$('#cities').innerHTML=CITIES.map(c=>`<section class="city" aria-label="${c.name}">
+  <div><div class="time" id="t-${c.id}">--:--:--</div><div class="name">${c.name}・${c.place}</div><div class="sub"><span id="d-${c.id}"></span>　<span id="o-${c.id}"></span></div></div>
+  <div id="w-${c.id}"><span class="sub">載入中…</span></div></section>`).join('');
+tick();setInterval(tick,1000);
+refreshAll();scheduleHourly();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshAll();});
+</script>
+</body>
+</html>
